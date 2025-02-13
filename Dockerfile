@@ -2,7 +2,7 @@
 FROM nodered/node-red:latest
 
 # Build argument to distinguish dev vs. production
-ARG ENV_MODE=development
+ARG ENV_MODE=production
 # Make it available inside the container as an environment variable
 ENV NODE_ENV=$ENV_MODE
 
