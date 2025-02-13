@@ -1,0 +1,20 @@
+# Ignore Node.js dependencies
+node_modules/
+
+# Node-RED runtime and user-specific config files
+.config.nodes.json
+.config.runtime.json
+.config.users.json
+.config.*.json.backup
+
+# Ignore any secrets
+flows_cred.json
+.flows.json.backup
+.flows_cred.json.backup
+
+# Mac/Windows OS files, etc.
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/

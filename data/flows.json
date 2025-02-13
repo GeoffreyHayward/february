@@ -1,0 +1,264 @@
+[
+    {
+        "id": "f221590ef854dc40",
+        "type": "tab",
+        "label": "Flow 1",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "a3ea451817146cd9",
+        "type": "tab",
+        "label": "Flow 2",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "http-in",
+        "type": "http in",
+        "z": "f221590ef854dc40",
+        "name": "HTTP In /tomorrow-weather",
+        "url": "/tomorrow-weather",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 240,
+        "wires": [
+            [
+                "build-url"
+            ]
+        ]
+    },
+    {
+        "id": "build-url",
+        "type": "function",
+        "z": "f221590ef854dc40",
+        "name": "Build OWM Forecast URL",
+        "func": "// Replace with your location and OpenWeatherMap API key.\n\n// For example: Exeter, UK\nconst city = \"Exeter\";\nconst countryCode = \"GB\";\n\n// OR use lat/lon:\n// const lat = \"50.7264\";\n// const lon = \"-3.5275\";\n\n// Your OWM API key\nconst apiKey = process.env.OWM_API_KEY || \"YOUR_OPENWEATHERMAP_API_KEY\";\n\n// Using the 5-day forecast endpoint\n// (returns data in 3-hour increments for up to 5 days)\n// We'll pass city name, or lat/lon if you prefer\n\n// Example if using city name:\n// msg.url = `https://api.openweathermap.org/data/2.5/forecast?q=${city},${countryCode}&units=metric&appid=${apiKey}`;\n\n// If you prefer lat/lon:\n// msg.url = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`;\n\n// For this demo, let's do city-based:\nmsg.url = `https://api.openweathermap.org/data/2.5/forecast?q=${city},${countryCode}&units=metric&appid=${apiKey}`;\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 490,
+        "y": 240,
+        "wires": [
+            [
+                "owm-request"
+            ]
+        ]
+    },
+    {
+        "id": "owm-request",
+        "type": "http request",
+        "z": "f221590ef854dc40",
+        "name": "Get 5-day Forecast",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 750,
+        "y": 240,
+        "wires": [
+            [
+                "parse-weather"
+            ]
+        ]
+    },
+    {
+        "id": "parse-weather",
+        "type": "function",
+        "z": "f221590ef854dc40",
+        "name": "Extract Tomorrow 5am–10am + Sunrise",
+        "func": "// The response should have:\n// {\n//   city: { sunrise, sunset, country, timezone, ... },\n//   list: [\n//     { dt_txt, main:{temp}, weather:[...], wind:{speed}, rain:{'3h':...}?, ...},\n//     ...\n//   ]\n// }\n\nconst forecastData = msg.payload;\nif (!forecastData || !forecastData.list || !forecastData.city) {\n    msg.statusCode = 500;\n    msg.payload = { error: \"Invalid response from weather API\" };\n    return [null, msg];\n}\n\nconst cityInfo = forecastData.city;\nconst sunriseUnix = cityInfo.sunrise;  // e.g. 1675855210\nconst timezoneOffset = cityInfo.timezone; // e.g. 0 or +3600, etc.\n\n// Convert sunrise time to a local string\n// Note: openweathermap sunrise is in UTC, cityInfo.timezone is offset in seconds.\nconst sunriseLocal = new Date((sunriseUnix + timezoneOffset) * 1000).toISOString();\n\n// We want forecast for the next day (tomorrow) from 05:00 to 10:00.\n// We'll figure out 'tomorrow' in local time.\n\n// 1) Grab today's date (UTC or local?), then add 1 day.\n//    Because OWM's dt_txt is in UTC, let's do everything in UTC.\n\nconst nowUtc = new Date();\nconst tomorrow = new Date(nowUtc);\ntomorrow.setUTCDate(tomorrow.getUTCDate() + 1);\n\nconst year = tomorrow.getUTCFullYear();\nconst month = String(tomorrow.getUTCMonth() + 1).padStart(2, '0');\nconst day = String(tomorrow.getUTCDate()).padStart(2, '0');\n// Tomorrow date string in format YYYY-MM-DD (UTC)\nconst tomorrowDateString = `${year}-${month}-${day}`;\n\n// We'll look for forecast entries that match 05:00:00, 06:00:00, 07:00:00,... up to 10:00:00.\n// Actually, OWM data is in 3-hour increments, so we might see entries at 03:00, 06:00, 09:00, 12:00.\n// We'll collect all times from 05:00 up to 10:59.\n\nfunction isTimeInWindow(dtTxt) {\n    // dtTxt is like \"2025-02-14 06:00:00\"\n    // We'll parse the date part and hour part.\n    const [datePart, timePart] = dtTxt.split(' ');\n    if (datePart !== tomorrowDateString) {\n        return false;\n    }\n    // timePart e.g. \"06:00:00\"\n    const [hourStr, minStr, secStr] = timePart.split(':');\n    const hour = parseInt(hourStr, 10);\n    // We want 5 <= hour < 11 (i.e. up to 10:xx)\n    return (hour >= 5 && hour < 11);\n}\n\n// Filter forecast list\nconst morningForecasts = forecastData.list.filter(item => {\n    return isTimeInWindow(item.dt_txt);\n});\n\n// We'll transform them into a simpler array of data.\nconst results = morningForecasts.map(entry => {\n    // main.temp (C), wind.speed (m/s), if present: rain[\"3h\"] (mm over last 3h), dt_txt\n    const temp = entry.main && entry.main.temp;\n    const wind = entry.wind && entry.wind.speed; // m/s\n    // OWM might have entry.rain = { '3h': 1.5 } meaning 1.5 mm in last 3h\n    const rainVolume = entry.rain && entry.rain['3h'] ? entry.rain['3h'] : 0;\n\n    return {\n        time: entry.dt_txt,           // e.g. \"2025-02-14 06:00:00\"\n        temperature: temp,           // in Celsius\n        windSpeed: wind,             // m/s\n        rainMmLast3h: rainVolume     // mm\n    };\n});\n\n// For convenience, we might also pick the weather description from entry.weather[0].description\n\nmsg.payload = {\n    city: cityInfo.name,\n    country: cityInfo.country,\n    sunrise: sunriseLocal,\n    timezoneOffsetSeconds: timezoneOffset,\n    forecast: results,\n};\n\n// We'll send a single message to the next node with statusCode = 200\nmsg.statusCode = 200;\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 380,
+        "wires": [
+            [
+                "http-response-ok"
+            ],
+            [
+                "http-response-error"
+            ]
+        ]
+    },
+    {
+        "id": "http-response-ok",
+        "type": "http response",
+        "z": "f221590ef854dc40",
+        "name": "Response 200 OK",
+        "statusCode": "",
+        "headers": {},
+        "x": 710,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "http-response-error",
+        "type": "http response",
+        "z": "f221590ef854dc40",
+        "name": "Response Error",
+        "statusCode": "",
+        "headers": {},
+        "x": 700,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "http-in-time",
+        "type": "http in",
+        "z": "a3ea451817146cd9",
+        "name": "HTTP In /time",
+        "url": "/time",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 170,
+        "y": 120,
+        "wires": [
+            [
+                "time-function"
+            ]
+        ]
+    },
+    {
+        "id": "time-function",
+        "type": "function",
+        "z": "a3ea451817146cd9",
+        "name": "Set Time Response",
+        "func": "// Return the server's current date/time\nmsg.payload = {\n    serverTime: new Date().toISOString()\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 120,
+        "wires": [
+            [
+                "http-response-time"
+            ]
+        ]
+    },
+    {
+        "id": "http-response-time",
+        "type": "http response",
+        "z": "a3ea451817146cd9",
+        "name": "HTTP Response 200",
+        "statusCode": "",
+        "headers": {},
+        "x": 720,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "http-in-reverse",
+        "type": "http in",
+        "z": "a3ea451817146cd9",
+        "name": "HTTP In /reverse",
+        "url": "/reverse",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 160,
+        "y": 200,
+        "wires": [
+            [
+                "reverse-function"
+            ]
+        ]
+    },
+    {
+        "id": "reverse-function",
+        "type": "function",
+        "z": "a3ea451817146cd9",
+        "name": "Reverse String",
+        "func": "// We'll read a 'string' query param, e.g. /reverse?string=Hello\n// If none provided, default to \"Hello\".\n\nconst inputStr = msg.req.query.string || \"Hello\";\n\n// Reverse the string\nconst reversed = inputStr.split('').reverse().join('');\n\n// Return as JSON\nmsg.payload = {\n    original: inputStr,\n    reversed: reversed\n};\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 400,
+        "y": 200,
+        "wires": [
+            [
+                "http-response-reverse"
+            ]
+        ]
+    },
+    {
+        "id": "http-response-reverse",
+        "type": "http response",
+        "z": "a3ea451817146cd9",
+        "name": "HTTP Response 200",
+        "statusCode": "",
+        "headers": {},
+        "x": 720,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "http-in-ping",
+        "type": "http in",
+        "z": "a3ea451817146cd9",
+        "name": "HTTP In /ping",
+        "url": "/ping",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 170,
+        "y": 40,
+        "wires": [
+            [
+                "ping-function"
+            ]
+        ]
+    },
+    {
+        "id": "ping-function",
+        "type": "function",
+        "z": "a3ea451817146cd9",
+        "name": "Set Ping Response",
+        "func": "// Create a simple JSON object with a status and timestamp\nmsg.payload = {\n    status: \"OK\",\n    timestamp: new Date().toISOString()\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 40,
+        "wires": [
+            [
+                "http-response-ping"
+            ]
+        ]
+    },
+    {
+        "id": "http-response-ping",
+        "type": "http response",
+        "z": "a3ea451817146cd9",
+        "name": "HTTP Response 200",
+        "statusCode": "",
+        "headers": {},
+        "x": 720,
+        "y": 40,
+        "wires": []
+    }
+]

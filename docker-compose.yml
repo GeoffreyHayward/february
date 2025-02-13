@@ -1,0 +1,9 @@
+version: '3'
+services:
+  nodered:
+    image: nodered/node-red:latest
+    container_name: nodered-dev
+    volumes:
+      - ./data:/data  # local folder -> container
+    ports:
+      - "1880:1880"
